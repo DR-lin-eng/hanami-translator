@@ -1,0 +1,37 @@
+[package]
+name = "hanami-translator"
+version = "0.1.0"
+description = "Privacy-first manga translation and typesetting desktop application"
+authors = ["DR-lin-eng"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/DR-lin-eng/hanami-translator"
+
+[lib]
+name = "hanami_translator_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "process", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# macOS 27's linker currently corrupts proc-macro Mach-O LINKEDIT data when
+# Cargo strips release intermediates. Keep intermediates unstripped; the final
+# app bundle remains optimized and can be stripped after linking if needed.
+[profile.release]
+strip = false

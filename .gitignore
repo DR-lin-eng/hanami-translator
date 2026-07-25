@@ -1,0 +1,24 @@
+# Dependencies and package-manager caches
+node_modules/
+.npm-cache/
+.pnpm-store/
+
+# Build and test output
+dist/
+src-tauri/target/
+release/
+output/
+coverage/
+*.tsbuildinfo
+
+# Project-local toolchains and caches
+.cargo/
+.rustup/
+.vite/
+
+# Local environment and OS files
+.DS_Store
+*.log
+.env
+*.env.local
+tmp/

@@ -1,0 +1,40 @@
+{
+  "name": "hanami-translator",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Privacy-first manga translation and typesetting desktop application",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DR-lin-eng/hanami-translator.git"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "assets:build": "swift -module-cache-path /private/tmp/hanami-swift-module-cache scripts/create-demo-assets.swift",
+    "test": "vitest run && npm run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "lucide-react": "^0.468.0",
+    "pdf-lib": "^1.17.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^4.1.10"
+  }
+}

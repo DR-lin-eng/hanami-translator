@@ -1,12 +1,18 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { PDFDocument } from "pdf-lib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PageItem, PageStatus } from "../src/types";
-import { buildPdfBytes, completedPagesInQueueOrder } from "../src/lib/exportPdf";
+import {
+  buildPdfBytes,
+  completedPagesInQueueOrder,
+  decodePngDataUrl,
+} from "../src/lib/exportPdf";
 
-const icon32 = pngDataUrl(readFileSync(new URL("../src-tauri/icons/32x32.png", import.meta.url)));
+const icon32Bytes = readFileSync(new URL("../src-tauri/icons/32x32.png", import.meta.url));
+const icon32 = pngDataUrl(icon32Bytes);
 const icon128 = pngDataUrl(readFileSync(new URL("../src-tauri/icons/128x128.png", import.meta.url)));
+const exportInputDirectory = process.env.HANAMI_PDF_EXPORT_INPUT_DIR;
 
 describe("PDF export", () => {
   it("keeps completed pages in queue order", () => {
@@ -34,6 +40,58 @@ describe("PDF export", () => {
       writeFileSync(outputPath, bytes);
     }
   });
+
+  it("reports preparation, page rendering, and finalization progress in order", async () => {
+    const progress: Array<{ phase: string; current: number; total: number }> = [];
+    await buildPdfBytes(
+      [page("first"), page("second")],
+      async (item) => item.id === "first" ? icon32 : icon128,
+      (update) => progress.push(update),
+    );
+
+    expect(progress[0]).toEqual({ phase: "preparing", current: 0, total: 2 });
+    expect(progress.filter((item) => item.phase === "rendering").map((item) => item.current)).toEqual([0, 1, 1, 2]);
+    expect(progress.at(-2)).toEqual({ phase: "finalizing", current: 2, total: 2 });
+    expect(progress.at(-1)).toEqual({ phase: "completed", current: 2, total: 2 });
+  });
+
+  it("decodes PNG data without WebView fetch", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Load failed")));
+    try {
+      expect(decodePngDataUrl(icon32)).toEqual(new Uint8Array(icon32Bytes));
+      const bytes = await buildPdfBytes([page("single")], async () => icon32);
+      expect((await PDFDocument.load(bytes)).getPageCount()).toBe(1);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.runIf(Boolean(exportInputDirectory))(
+    "exports a real PNG folder in filename order",
+    async () => {
+      const inputDirectory = resolve(exportInputDirectory!);
+      const filenames = readdirSync(inputDirectory)
+        .filter((name) => name.toLowerCase().endsWith(".png"))
+        .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+      const pages = filenames.map((name) => ({ ...page(name), name }));
+      const bytes = await buildPdfBytes(pages, async (item) => (
+        pngDataUrl(readFileSync(join(inputDirectory, item.name)))
+      ));
+      const document = await PDFDocument.load(bytes);
+
+      expect(filenames.length).toBeGreaterThan(0);
+      expect(document.getPageCount()).toBe(filenames.length);
+
+      const outputPath = process.env.HANAMI_PDF_TEST_OUTPUT;
+      if (outputPath) {
+        const resolvedOutput = resolve(outputPath);
+        mkdirSync(dirname(resolvedOutput), { recursive: true });
+        writeFileSync(resolvedOutput, bytes);
+      }
+    },
+    60_000,
+  );
 });
 
 function page(id: string, status: PageStatus = "completed"): PageItem {

@@ -6,14 +6,14 @@
 
 1. React/TypeScript 负责队列状态、画布选区、设置和本地导出合成。
 2. Tauri 命令层负责输入校验和前后端数据契约。
-3. Rust 核心负责文件导入、PDF 转页、隐私图生成、Images API 请求和本机凭据存储。
+3. Rust 核心负责文件导入、PDF 转页、隐私图生成、Images / Responses API 请求和本机凭据存储。
 
 Rust 模块职责：
 
 - `domain.rs`：跨边界 DTO 和归一化坐标
 - `importer.rs`：图片/文件夹扫描、PDF 转页、预览编码
 - `privacy.rs`：隐私像素移除与编辑 alpha mask
-- `openai.rs`：Images API multipart 客户端与错误归一化
+- `openai.rs`：共享翻译提示词、Images multipart / Responses JSON 传输、图片解码与错误归一化
 - `credentials.rs`：API Key 私有文件存储与旧 Keychain 迁移
 - `pipeline.rs`：单页处理编排与导出写盘
 - `commands.rs`：最薄的 Tauri IPC 入口
@@ -24,14 +24,20 @@ Rust 模块职责：
 原始页面
   -> 应用隐私遮挡区，生成不会包含原始敏感像素的请求图
   -> 可选：把文字编辑范围转换成 alpha mask
-  -> POST /v1/images/edits
+  -> 按 apiMode 选择 POST /v1/images/edits 或 POST /v1/responses
   -> 返回完整翻译页
   -> 本机按归一化坐标回填文字区与隐私区
   -> 在回填边缘环带执行局部泊松融合，核心区域保持原始像素
-  -> PNG 导出
+  -> PNG 或按队列顺序导出 PDF
 ```
 
 不创建文字编辑范围时，模型处理整页。创建文字编辑范围后，透明区域表示可编辑，其他像素保持不变。隐私范围与文字范围重叠时，隐私优先，并在编辑 mask 中保持不透明。
+
+Responses 通过主模型调用 `image_generation` 编辑工具，主模型与图像模型独立配置。图片与 mask 使用本地预处理文件的 Base64 data URL，不引入 OCR 或独立文本翻译步骤。两种协议进入同一个取消和并发控制层，并复用本机合成与导出流程。
+
+## 导出进度
+
+PNG 图集按页面顺序逐页渲染和写入；PDF 先逐页渲染到 PDF 页面，再显示最终整理和写入阶段。React 将这些阶段显示在工具栏下方的可访问进度条中，导出期间锁定重复导出入口；失败或取消文件选择时清除进度状态，不影响已完成页面。
 
 ## 并发模型
 

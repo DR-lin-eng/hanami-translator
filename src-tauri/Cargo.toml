@@ -1,6 +1,6 @@
 [package]
 name = "hanami-translator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Privacy-first manga translation and typesetting desktop application"
 authors = ["DR-lin-eng"]
 edition = "2021"
@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+pdfium-bundled = { version = "0.1.1", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

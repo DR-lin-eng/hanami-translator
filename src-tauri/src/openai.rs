@@ -5,9 +5,12 @@ use reqwest::{
     multipart::{Form, Part},
     Client,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    domain::ApiMode,
+    error::{AppError, AppResult},
+};
 
 pub struct OpenAiClient {
     client: Client,
@@ -16,6 +19,8 @@ pub struct OpenAiClient {
 }
 
 pub struct ImageEditOptions<'a> {
+    pub api_mode: ApiMode,
+    pub responses_model: &'a str,
     pub model: &'a str,
     pub quality: &'a str,
     pub size: &'a str,
@@ -62,29 +67,20 @@ impl OpenAiClient {
     }
 
     pub async fn edit_image(&self, options: ImageEditOptions<'_>) -> AppResult<String> {
-        let scope = match (
-            options.isolates_text_regions,
-            options.protects_privacy_regions,
-        ) {
-            (true, true) => "Only selected text regions are visible. Translate and change only the transparent mask areas. Keep every neutral or opaque area unchanged and never reconstruct the protected content.",
-            (true, false) => "Only selected text regions are visible. Translate and change only the transparent mask areas. Ignore the neutral background and keep it unchanged.",
-            (false, true) => "Translate readable text only in the transparent mask areas. Neutral opaque areas are intentional privacy redactions: keep them unchanged and never infer, reconstruct, or replace their hidden content.",
-            (false, false) => "Translate all readable source-language text on the page.",
-        };
-        let extra = options.additional_instructions.trim();
-        let prompt = format!(
-            "Use case: text-localization\nAsset type: {}\nPrimary request: identify the visible {} text, translate it accurately into {}, remove the original lettering, and typeset the translation naturally in the same location.\n{}\nPlacement: keep every replacement inside its original transparent mask region with the same center, orientation, reading direction, and visual scale. Never move text into another region.\nConstraints: preserve panel layout, speech bubbles, illustrations, faces, colors, textures, logos, and non-text details outside protected neutral areas. Keep reading order and tone. Never reconstruct protected or missing content. Do not summarize, add captions, invent dialogue, add watermarks, or redesign the artwork. Return one finished localized page.{}",
-            options.page_type,
-            options.source_language,
-            options.target_language,
-            scope,
-            if extra.is_empty() { String::new() } else { format!("\nAdditional instructions: {extra}") },
-        );
+        match options.api_mode {
+            ApiMode::Images => self.edit_via_images(&options).await,
+            ApiMode::Responses => self.edit_via_responses(&options).await,
+        }
+    }
+
+    async fn edit_via_images(&self, options: &ImageEditOptions<'_>) -> AppResult<String> {
+        let prompt = translation_prompt(options);
         let image_bytes = fs::read(options.image_path)?;
         let mut form = Form::new()
             .text("model", options.model.to_owned())
             .text("quality", normalize_quality(options.quality).to_owned())
             .text("size", options.size.to_owned())
+            .text("output_format", "png")
             .text("prompt", prompt)
             .part(
                 "image[]",
@@ -116,11 +112,120 @@ impl OpenAiClient {
             .and_then(|item| item.get("b64_json"))
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::Message("图像编辑接口未返回图片数据".into()))?;
-        STANDARD
-            .decode(encoded)
-            .map_err(|error| AppError::Message(format!("图像结果解码失败：{error}")))?;
-        Ok(format!("data:image/png;base64,{encoded}"))
+        png_data_url(encoded)
     }
+
+    async fn edit_via_responses(&self, options: &ImageEditOptions<'_>) -> AppResult<String> {
+        let body = responses_edit_body(options)?;
+        let response = self
+            .client
+            .post(format!("{}/responses", self.api_base))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?;
+        let value = parse_json_response(ensure_success(response).await?).await?;
+        png_data_url(responses_image_result(&value)?)
+    }
+}
+
+fn translation_prompt(options: &ImageEditOptions<'_>) -> String {
+    let scope = match (
+            options.isolates_text_regions,
+            options.protects_privacy_regions,
+        ) {
+            (true, true) => "Only selected text regions are visible. Translate and change only the transparent mask areas. Keep every neutral or opaque area unchanged and never reconstruct the protected content.",
+            (true, false) => "Only selected text regions are visible. Translate and change only the transparent mask areas. Ignore the neutral background and keep it unchanged.",
+            (false, true) => "Translate readable text only in the transparent mask areas. Neutral opaque areas are intentional privacy redactions: keep them unchanged and never infer, reconstruct, or replace their hidden content.",
+            (false, false) => "Translate all readable source-language text on the page.",
+        };
+    let extra = options.additional_instructions.trim();
+    format!(
+            "Use case: text-localization\nAsset type: {}\nPrimary request: identify the visible {} text, translate it accurately into {}, remove the original lettering, and typeset the translation naturally in the same location.\n{}\nPlacement: keep every replacement inside its original transparent mask region with the same center, orientation, reading direction, and visual scale. Never move text into another region.\nConstraints: preserve panel layout, speech bubbles, illustrations, faces, colors, textures, logos, and non-text details outside protected neutral areas. Keep reading order and tone. Never reconstruct protected or missing content. Do not summarize, add captions, invent dialogue, add watermarks, or redesign the artwork. Return one finished localized page.{}",
+            options.page_type,
+            options.source_language,
+            options.target_language,
+            scope,
+            if extra.is_empty() { String::new() } else { format!("\nAdditional instructions: {extra}") },
+        )
+}
+
+fn responses_edit_body(options: &ImageEditOptions<'_>) -> AppResult<Value> {
+    let model = options.responses_model.trim();
+    if model.is_empty() {
+        return Err(AppError::Message(
+            "请填写 Responses 主模型（例如 gpt-5），使用中转服务时填写其支持的路由模型".into(),
+        ));
+    }
+    let mut tool = json!({
+        "type": "image_generation",
+        "model": options.model.trim(),
+        "action": "edit",
+        "quality": normalize_quality(options.quality),
+        "size": options.size,
+        "output_format": "png",
+    });
+    if let Some(mask_path) = options.mask_path {
+        tool["input_image_mask"] = json!({ "image_url": png_file_data_url(mask_path)? });
+    }
+    Ok(json!({
+        "model": model,
+        "store": false,
+        "stream": false,
+        "input": [{
+            "role": "user",
+            "content": [
+                { "type": "input_text", "text": translation_prompt(options) },
+                { "type": "input_image", "image_url": png_file_data_url(options.image_path)?, "detail": "high" },
+            ],
+        }],
+        "tools": [tool],
+        "tool_choice": { "type": "image_generation" },
+    }))
+}
+
+fn png_file_data_url(path: &Path) -> AppResult<String> {
+    Ok(format!(
+        "data:image/png;base64,{}",
+        STANDARD.encode(fs::read(path)?)
+    ))
+}
+
+fn responses_image_result(value: &Value) -> AppResult<&str> {
+    if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+        return Err(AppError::Message(format!("Responses API：{message}")));
+    }
+    if let Some(status) = value.get("status").and_then(Value::as_str) {
+        if status != "completed" {
+            let reason = value
+                .pointer("/incomplete_details/reason")
+                .and_then(Value::as_str)
+                .unwrap_or(status);
+            return Err(AppError::Message(format!("Responses 绘图未完成：{reason}")));
+        }
+    }
+    value.get("output").and_then(Value::as_array)
+        .and_then(|output| output.iter().find_map(|item| {
+            if item.get("type").and_then(Value::as_str) != Some("image_generation_call") {
+                return None;
+            }
+            if item.get("status").and_then(Value::as_str).is_some_and(|status| status != "completed") {
+                return None;
+            }
+            item.get("result").and_then(Value::as_str).filter(|result| !result.is_empty())
+        }))
+        .ok_or_else(|| AppError::Message(
+            "Responses API 未返回 image_generation_call.result 图片数据；请确认主模型与中转服务支持 image_generation 绘图工具".into()
+        ))
+}
+
+fn png_data_url(encoded: &str) -> AppResult<String> {
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| AppError::Message(format!("图像结果解码失败：{error}")))?;
+    image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .map_err(|error| AppError::Message(format!("接口返回的图片不是有效 PNG：{error}")))?;
+    Ok(format!("data:image/png;base64,{encoded}"))
 }
 
 pub fn image_output_size(model: &str, width: u32, height: u32) -> String {
@@ -234,11 +339,15 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::{imageops, RgbaImage};
 
-    use super::{image_output_size, validate_api_base, ImageEditOptions, OpenAiClient};
+    use super::{
+        image_output_size, png_data_url, responses_edit_body, responses_image_result,
+        validate_api_base, ImageEditOptions, OpenAiClient,
+    };
     use crate::{
-        domain::{MaskKind, MaskRegion, NormalizedRect},
+        domain::{ApiMode, MaskKind, MaskRegion, NormalizedRect},
         privacy::create_privacy_artifacts,
     };
+    use serde_json::json;
 
     #[test]
     fn accepts_https_and_loopback_only() {
@@ -265,6 +374,160 @@ mod tests {
     fn legacy_models_use_supported_popular_sizes() {
         assert_eq!(image_output_size("gpt-image-1", 1400, 1900), "1024x1536");
         assert_eq!(image_output_size("gpt-image-1", 1900, 1400), "1536x1024");
+    }
+
+    #[test]
+    fn responses_edit_uses_only_prepared_image_and_mask_with_separate_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_path = dir.path().join("source.png");
+        RgbaImage::from_pixel(64, 64, image::Rgba([20, 40, 60, 255]))
+            .save(&source_path)
+            .unwrap();
+        let artifacts = create_privacy_artifacts(
+            &source_path,
+            &[
+                MaskRegion {
+                    id: "text".into(),
+                    kind: MaskKind::TextEdit,
+                    rect: NormalizedRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.5,
+                        height: 0.5,
+                    },
+                },
+                MaskRegion {
+                    id: "private".into(),
+                    kind: MaskKind::Privacy,
+                    rect: NormalizedRect {
+                        x: 0.6,
+                        y: 0.6,
+                        width: 0.2,
+                        height: 0.2,
+                    },
+                },
+            ],
+            &dir.path().join("prepared"),
+        )
+        .unwrap();
+        let body = responses_edit_body(&ImageEditOptions {
+            api_mode: ApiMode::Responses,
+            responses_model: " gpt-5 ",
+            model: "gpt-image-2",
+            quality: "high",
+            size: "1024x1024",
+            image_path: &artifacts.image_path,
+            mask_path: artifacts.mask_path.as_deref(),
+            source_language: "Japanese",
+            target_language: "Simplified Chinese",
+            page_type: "manga page",
+            additional_instructions: "Keep the same typography.",
+            isolates_text_regions: true,
+            protects_privacy_regions: true,
+        })
+        .unwrap();
+        assert_eq!(body["model"], "gpt-5");
+        assert_eq!(body["tools"][0]["model"], "gpt-image-2");
+        assert_eq!(body["tools"][0]["action"], "edit");
+        assert_eq!(body["tool_choice"], json!({ "type": "image_generation" }));
+        assert_eq!(body["store"], false);
+        let input = body["input"][0]["content"][1]["image_url"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            input,
+            format!(
+                "data:image/png;base64,{}",
+                STANDARD.encode(fs::read(&artifacts.image_path).unwrap())
+            )
+        );
+        assert_ne!(
+            input,
+            format!(
+                "data:image/png;base64,{}",
+                STANDARD.encode(fs::read(&source_path).unwrap())
+            )
+        );
+        let mask = body["tools"][0]["input_image_mask"]["image_url"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            mask,
+            format!(
+                "data:image/png;base64,{}",
+                STANDARD.encode(fs::read(artifacts.mask_path.unwrap()).unwrap())
+            )
+        );
+        let prompt = body["input"][0]["content"][0]["text"].as_str().unwrap();
+        assert!(prompt.contains("never reconstruct the protected content"));
+        assert!(prompt.contains("Keep the same typography."));
+    }
+
+    #[test]
+    fn responses_parser_finds_final_image_after_other_output_items() {
+        let response = json!({"status":"completed", "output":[
+            {"type":"message", "content":[{"type":"output_text", "text":"Done"}]},
+            {"type":"image_generation_call", "status":"completed", "result":""},
+            {"type":"image_generation_call", "status":"completed", "result":"encoded-image"},
+        ]});
+        assert_eq!(responses_image_result(&response).unwrap(), "encoded-image");
+    }
+
+    #[test]
+    fn responses_parser_rejects_text_only_errors_and_unfinished_images() {
+        for response in [
+            json!({"status":"completed", "output":[{"type":"message", "content":[{"type":"output_text", "text":"Done"}]}]}),
+            json!({"status":"failed", "error":{"message":"image generation failed"}}),
+            json!({"status":"incomplete", "incomplete_details":{"reason":"max_output_tokens"}, "output":[{"type":"image_generation_call", "result":"partial"}]}),
+            json!({"status":"completed", "output":[{"type":"image_generation_call", "status":"in_progress", "result":"partial"}]}),
+        ] {
+            assert!(responses_image_result(&response).is_err());
+        }
+        assert!(png_data_url(&STANDARD.encode("Done")).is_err());
+        assert!(png_data_url("bad base64").is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the saved API key and makes a billable Responses image edit"]
+    async fn live_responses_demo_edit_returns_png() {
+        let source_path = PathBuf::from(
+            env::var("HANAMI_LIVE_TEST_IMAGE")
+                .expect("set HANAMI_LIVE_TEST_IMAGE to the safe demo image"),
+        );
+        let output_dir = PathBuf::from(
+            env::var("HANAMI_LIVE_TEST_OUTPUT").expect("set HANAMI_LIVE_TEST_OUTPUT"),
+        );
+        fs::create_dir_all(&output_dir).unwrap();
+        let artifacts =
+            create_privacy_artifacts(&source_path, &[], &output_dir.join("prepared")).unwrap();
+        let model = env::var("HANAMI_LIVE_TEST_MODEL").unwrap_or_else(|_| "gpt-image-2".into());
+        let responses_model =
+            env::var("HANAMI_LIVE_TEST_RESPONSES_MODEL").unwrap_or_else(|_| "gpt-5".into());
+        let size = image_output_size(&model, artifacts.image_width, artifacts.image_height);
+        let client = OpenAiClient::new(
+            load_saved_api_key(),
+            &env::var("HANAMI_LIVE_TEST_API_BASE").expect("set HANAMI_LIVE_TEST_API_BASE"),
+        )
+        .unwrap();
+        let result = client.edit_image(ImageEditOptions {
+            api_mode: ApiMode::Responses, responses_model: &responses_model, model: &model,
+            quality: "low", size: &size, image_path: &artifacts.image_path, mask_path: None,
+            source_language: "Japanese", target_language: "Simplified Chinese", page_type: "manga page",
+            additional_instructions: "Edit the provided image: translate the Japanese speech bubble lettering into Simplified Chinese. Return the edited image using the image generation tool.",
+            isolates_text_regions: false, protects_privacy_regions: false,
+        }).await.unwrap();
+        let bytes = STANDARD.decode(result.split_once(',').unwrap().1).unwrap();
+        let generated = image::load_from_memory(&bytes).unwrap();
+        assert!(generated.width() > 0 && generated.height() > 0);
+        assert_ne!(bytes, fs::read(&source_path).unwrap());
+        let output = output_dir.join("responses-translated.png");
+        fs::write(&output, bytes).unwrap();
+        eprintln!(
+            "Responses PNG: {} ({}x{})",
+            output.display(),
+            generated.width(),
+            generated.height()
+        );
     }
 
     #[tokio::test]
@@ -305,6 +568,8 @@ mod tests {
         .unwrap();
         let result = client
             .edit_image(ImageEditOptions {
+                api_mode: ApiMode::Images,
+                responses_model: "gpt-5",
                 model: &model,
                 quality: "medium",
                 size: &size,

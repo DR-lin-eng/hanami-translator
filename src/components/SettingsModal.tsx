@@ -53,8 +53,8 @@ export function SettingsModal({ open, settings, onClose, onSettingsChange, onNot
   const testConnection = async () => {
     setBusy(true);
     try {
-      await testApiConnection(settings.apiBase, settings.imageModel);
-      onNotice("Images API 连接正常", "success");
+      await testApiConnection(settings);
+      onNotice("连接正常，所选模型可访问；绘图能力以实际处理为准", "success");
     } catch (error) {
       onNotice(String(error), "error");
     } finally {
@@ -66,7 +66,7 @@ export function SettingsModal({ open, settings, onClose, onSettingsChange, onNot
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header>
-          <div><h2 id="settings-title">API 与模型</h2><p>Images Edit API</p></div>
+          <div><h2 id="settings-title">API 与模型</h2><p>{settings.apiMode === "responses" ? "Responses API · 图像编辑" : "Images Edit API"}</p></div>
           <button className="icon-button" type="button" onClick={onClose} aria-label="关闭设置" title="关闭"><X size={18} /></button>
         </header>
 
@@ -80,10 +80,28 @@ export function SettingsModal({ open, settings, onClose, onSettingsChange, onNot
             </div>
           </div>
 
+          <div className="settings-group">
+            <span className="field-label" id="api-mode-label">绘图接口</span>
+            <div className="segmented-control full api-mode-control" role="group" aria-labelledby="api-mode-label">
+              {(["images", "responses"] as const).map((apiMode) => (
+                <button type="button" key={apiMode} aria-pressed={settings.apiMode === apiMode} className={settings.apiMode === apiMode ? "active" : ""} onClick={() => onSettingsChange({ apiMode })}>
+                  {apiMode === "images" ? "Images" : "Responses"}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="settings-group two-column">
             <label><span>API 地址</span><input value={settings.apiBase} onChange={(event) => onSettingsChange({ apiBase: event.target.value })} spellCheck={false} /></label>
             <label><span>图像模型</span><input value={settings.imageModel} onChange={(event) => onSettingsChange({ imageModel: event.target.value })} spellCheck={false} /></label>
           </div>
+
+          {settings.apiMode === "responses" && (
+            <div className="settings-group">
+              <label><span>Responses 主模型</span><input value={settings.responsesModel} onChange={(event) => onSettingsChange({ responsesModel: event.target.value })} placeholder="gpt-5" aria-describedby="responses-model-help" spellCheck={false} /></label>
+              <p id="responses-model-help" className="settings-help">主模型需支持绘图工具；使用中转服务时填写其支持的路由模型。两项配置会自动保存。</p>
+            </div>
+          )}
 
           <div className="settings-group">
             <span className="field-label">生成质量</span>

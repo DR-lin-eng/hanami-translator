@@ -18,12 +18,16 @@ describe("API settings persistence", () => {
     const storage = new MemoryStorage();
     saveApiSettings({
       apiBase: " https://example.com/v1/ ",
+      apiMode: "responses",
+      responsesModel: " gpt-5 ",
       imageModel: " gpt-image-2 ",
       quality: "high",
     }, storage);
 
     expect(loadApiSettings(storage)).toEqual({
       apiBase: "https://example.com/v1/",
+      apiMode: "responses",
+      responsesModel: "gpt-5",
       imageModel: "gpt-image-2",
       quality: "high",
     });
@@ -34,10 +38,22 @@ describe("API settings persistence", () => {
     storage.setItem("unused", JSON.stringify({
       apiBase: 42,
       imageModel: "",
+      apiMode: "chat",
+      responsesModel: "",
       quality: "ultra",
       apiKey: "must-not-be-loaded",
     }));
 
     expect(loadApiSettings(storage)).toEqual({});
+  });
+
+  it("keeps older Images settings readable without overriding the new defaults", () => {
+    const storage = new MemoryStorage();
+    storage.setItem("unused", JSON.stringify({
+      apiBase: "https://example.com/v1", imageModel: "gpt-image-2", quality: "medium",
+    }));
+    expect(loadApiSettings(storage)).toEqual({
+      apiBase: "https://example.com/v1", imageModel: "gpt-image-2", quality: "medium",
+    });
   });
 });

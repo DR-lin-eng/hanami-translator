@@ -36,6 +36,18 @@ pub enum MaskKind {
     Privacy,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ApiMode {
+    #[default]
+    Images,
+    Responses,
+}
+
+pub fn default_responses_model() -> String {
+    "gpt-5".into()
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NormalizedRect {
@@ -68,6 +80,10 @@ pub struct ProcessPageRequest {
     pub additional_instructions: String,
     pub regions: Vec<MaskRegion>,
     pub api_base: String,
+    #[serde(default)]
+    pub api_mode: ApiMode,
+    #[serde(default = "default_responses_model")]
+    pub responses_model: String,
     pub image_model: String,
     pub quality: String,
 }
@@ -84,12 +100,32 @@ pub struct ProcessPageResult {
 #[serde(rename_all = "camelCase")]
 pub struct ApiSettings {
     pub api_base: String,
+    #[serde(default)]
+    pub api_mode: ApiMode,
+    #[serde(default = "default_responses_model")]
+    pub responses_model: String,
     pub image_model: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::NormalizedRect;
+    use super::{ApiMode, ApiSettings, NormalizedRect, ProcessPageRequest};
+
+    #[test]
+    fn legacy_requests_and_connection_settings_default_to_images() {
+        let request: ProcessPageRequest = serde_json::from_value(serde_json::json!({
+            "path": "page.png", "sourceLanguage": "English", "targetLanguage": "Chinese",
+            "pageType": "document", "additionalInstructions": "", "regions": [],
+            "apiBase": "https://api.openai.com/v1", "imageModel": "gpt-image-2", "quality": "medium",
+        })).unwrap();
+        assert_eq!(request.api_mode, ApiMode::Images);
+        assert_eq!(request.responses_model, "gpt-5");
+        let settings: ApiSettings = serde_json::from_value(serde_json::json!({
+            "apiBase": "https://api.openai.com/v1", "imageModel": "gpt-image-2",
+        }))
+        .unwrap();
+        assert_eq!(settings.api_mode, ApiMode::Images);
+    }
 
     #[test]
     fn normalized_rect_is_clamped_to_canvas() {

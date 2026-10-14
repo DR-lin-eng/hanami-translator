@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     credentials,
-    domain::{ProcessPageRequest, ProcessPageResult},
+    domain::{ApiMode, ProcessPageRequest, ProcessPageResult},
     error::{AppError, AppResult},
     openai::{ImageEditOptions, OpenAiClient},
     privacy,
@@ -41,6 +41,8 @@ pub async fn process_page(
         artifacts.image_height,
     );
     let edit_request = client.edit_image(ImageEditOptions {
+        api_mode: request.api_mode,
+        responses_model: &request.responses_model,
         model: &request.image_model,
         quality: &request.quality,
         size: &output_size,
@@ -60,8 +62,12 @@ pub async fn process_page(
         result = &mut edit_request => result?,
     };
 
+    let api_name = match request.api_mode {
+        ApiMode::Images => "Images API",
+        ApiMode::Responses => "Responses API",
+    };
     let note = match (artifacts.text_region_count, artifacts.privacy_region_count) {
-        (0, 0) => "已通过 Images API 完成整页翻译嵌字".to_owned(),
+        (0, 0) => format!("已通过 {api_name} 完成整页翻译嵌字"),
         (0, private) => format!("已完成整页翻译；{private} 个隐私区域未上传并将在导出时从原图回填"),
         (text, 0) => format!("已隔离上传并完成 {text} 个指定文字区域的翻译嵌字"),
         (text, private) => {

@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 
 use crate::{
     credentials,
-    domain::{ApiSettings, ProcessPageRequest, ProcessPageResult, SourceAsset},
+    domain::{ApiMode, ApiSettings, ProcessPageRequest, ProcessPageResult, SourceAsset},
     importer,
     openai::OpenAiClient,
     pipeline,
@@ -72,7 +72,14 @@ pub async fn test_api_connection(app: AppHandle, settings: ApiSettings) -> Resul
     client
         .check_model(&settings.image_model)
         .await
-        .map_err(Into::into)
+        .map_err(String::from)?;
+    if settings.api_mode == ApiMode::Responses {
+        client
+            .check_model(&settings.responses_model)
+            .await
+            .map_err(String::from)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

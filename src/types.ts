@@ -1,6 +1,17 @@
 export type SourceKind = "image" | "pdfPage" | "demo";
 export type PageStatus = "ready" | "processing" | "completed" | "error";
 export type MaskKind = "textEdit" | "privacy";
+export type ApiMode = "images" | "responses";
+export type ExportKind = "png" | "pdf";
+export type ExportPhase = "preparing" | "rendering" | "finalizing" | "writing" | "completed";
+
+export interface ExportProgress {
+  kind: ExportKind;
+  phase: ExportPhase;
+  current: number;
+  total: number;
+  message: string;
+}
 
 export interface SourceAsset {
   id: string;
@@ -46,6 +57,8 @@ export interface AppSettings {
   additionalInstructions: string;
   concurrency: number;
   apiBase: string;
+  apiMode: ApiMode;
+  responsesModel: string;
   imageModel: string;
   quality: "low" | "medium" | "high" | "auto";
 }
@@ -58,6 +71,8 @@ export interface ProcessPageRequest {
   additionalInstructions: string;
   regions: MaskRegion[];
   apiBase: string;
+  apiMode: ApiMode;
+  responsesModel: string;
   imageModel: string;
   quality: string;
 }

@@ -27,7 +27,7 @@ import {
 import { runConcurrent } from "./lib/pipeline";
 import { ProcessingTracker } from "./lib/processingTracker";
 import { loadApiSettings, saveApiSettings } from "./lib/settings";
-import type { AppSettings, MaskKind, NormalizedRect, PageItem, ProcessPageRequest, SourceAsset } from "./types";
+import type { AppSettings, ExportKind, ExportPhase, ExportProgress, MaskKind, NormalizedRect, PageItem, ProcessPageRequest, SourceAsset } from "./types";
 
 const DEFAULT_SETTINGS: AppSettings = {
   sourceLanguage: "Japanese",
@@ -36,6 +36,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   additionalInstructions: "",
   concurrency: 2,
   apiBase: "https://api.openai.com/v1",
+  apiMode: "images",
+  responsesModel: "gpt-5",
   imageModel: "gpt-image-2",
   quality: "medium",
 };
@@ -56,6 +58,9 @@ export default function App() {
   const cancelledJobs = useRef(new Set<string>());
   const [activeJobCount, setActiveJobCount] = useState(0);
   const [stopping, setStopping] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress>();
+  const exportBusy = useRef(false);
+  const exportHideTimer = useRef<number | undefined>(undefined);
 
   const selectedPage = pages.find((page) => page.id === selectedId) ?? pages[0];
   const processing = activeJobCount > 0;
@@ -86,10 +91,12 @@ export default function App() {
   useEffect(() => {
     saveApiSettings({
       apiBase: settings.apiBase,
+      apiMode: settings.apiMode,
+      responsesModel: settings.responsesModel,
       imageModel: settings.imageModel,
       quality: settings.quality,
     });
-  }, [settings.apiBase, settings.imageModel, settings.quality]);
+  }, [settings.apiBase, settings.apiMode, settings.responsesModel, settings.imageModel, settings.quality]);
 
   useEffect(() => {
     if (!isNative()) return;
@@ -107,9 +114,11 @@ export default function App() {
 
   const title = selectedPage?.pageNumber ? `第 ${selectedPage.pageNumber} 页` : selectedPage?.name ?? "未命名项目";
   const subtitle = stopping
-    ? "正在中断 Images API 请求"
+    ? "正在中断绘图请求"
+    : exportProgress
+      ? exportProgress.message
     : processing
-      ? "Images API 正在处理"
+      ? "图像翻译正在处理"
       : completedCount
         ? `${completedCount} 页可导出`
         : `${pages.length} 页待处理`;
@@ -157,7 +166,7 @@ export default function App() {
 
   const processingAvailable = async () => {
     if (!isNative()) {
-      showNotice("请启动编译后的桌面版以调用 Images API", "error");
+      showNotice("请启动编译后的桌面版以调用绘图 API", "error");
       return false;
     }
     if (!(await apiKeyConfigured())) {
@@ -176,6 +185,8 @@ export default function App() {
     additionalInstructions: settings.additionalInstructions,
     regions: page.regions,
     apiBase: settings.apiBase,
+    apiMode: settings.apiMode,
+    responsesModel: settings.responsesModel,
     imageModel: settings.imageModel,
     quality: settings.quality,
   });
@@ -269,33 +280,75 @@ export default function App() {
     }
   };
 
+  const beginExport = (kind: ExportKind, total: number): boolean => {
+    if (exportBusy.current) return false;
+    exportBusy.current = true;
+    if (exportHideTimer.current) window.clearTimeout(exportHideTimer.current);
+    setExportProgress({ kind, phase: "preparing", current: 0, total, message: kind === "pdf" ? "准备拼接 PDF" : "准备导出 PNG" });
+    return true;
+  };
+
+  const updateExportProgress = (kind: ExportKind, phase: ExportPhase, current: number, total: number, message: string) => {
+    setExportProgress({ kind, phase, current, total, message });
+  };
+
+  const cancelExport = () => {
+    exportBusy.current = false;
+    setExportProgress(undefined);
+  };
+
+  const completeExport = (kind: ExportKind, total: number, message: string) => {
+    setExportProgress({ kind, phase: "completed", current: total, total, message });
+    exportHideTimer.current = window.setTimeout(() => {
+      exportBusy.current = false;
+      setExportProgress(undefined);
+    }, 900);
+  };
+
   const exportPngResults = async () => {
     const completed = completedPagesInQueueOrder(pages);
     if (!completed.length) return;
+    const exportTotal = isNative() && completed.length > 1 ? completed.length : 1;
+    if (!beginExport("png", exportTotal)) return;
     try {
       if (isNative() && completed.length > 1) {
         const folder = await chooseOutputFolder();
-        if (!folder) return;
-        await Promise.all(completed.map(async (page, index) => {
+        if (!folder) {
+          cancelExport();
+          return;
+        }
+        for (const [index, page] of completed.entries()) {
+          updateExportProgress("png", "rendering", index, completed.length, `正在生成第 ${index + 1} / ${completed.length} 页 PNG`);
           const output = await renderPageToPng(page);
+          updateExportProgress("png", "writing", index, completed.length, `正在写入第 ${index + 1} / ${completed.length} 页 PNG`);
           await writeOutput(`${folder}/hanami-${String(index + 1).padStart(3, "0")}.png`, output);
-        }));
+          updateExportProgress("png", "rendering", index + 1, completed.length, `已完成 ${index + 1} / ${completed.length} 页 PNG`);
+        }
       } else {
         const page = selectedPage?.status === "completed" ? selectedPage : completed[0];
+        updateExportProgress("png", "rendering", 0, 1, "正在生成 PNG 图片");
         const output = await renderPageToPng(page);
         if (isNative()) {
+          updateExportProgress("png", "writing", 0, 1, "正在保存 PNG 图片");
           const path = await chooseOutputFile(`${page.name.replace(/\.[^.]+$/, "")}-translated.png`);
-          if (!path) return;
+          if (!path) {
+            cancelExport();
+            return;
+          }
           await writeOutput(path, output);
         } else {
+          updateExportProgress("png", "writing", 0, 1, "正在触发 PNG 下载");
           const anchor = document.createElement("a");
           anchor.href = output;
           anchor.download = "hanami-translated.png";
           anchor.click();
         }
+        updateExportProgress("png", "rendering", 1, 1, "PNG 图片已生成");
       }
+      completeExport("png", exportTotal, `PNG 导出完成，共 ${exportTotal} 页`);
       showNotice("已导出 PNG", "success");
     } catch (error) {
+      cancelExport();
       showNotice(String(error), "error");
     }
   };
@@ -303,20 +356,37 @@ export default function App() {
   const exportPdfResults = async () => {
     const completed = completedPagesInQueueOrder(pages);
     if (!completed.length) return;
+    if (!beginExport("pdf", completed.length)) return;
     try {
-      const output = await buildPdfBytes(completed);
+      const output = await buildPdfBytes(completed, renderPageToPng, (progress) => {
+        const message = progress.phase === "preparing"
+          ? "准备拼接 PDF"
+          : progress.phase === "rendering"
+            ? `正在拼接第 ${Math.min(progress.current + 1, progress.total)} / ${progress.total} 页`
+            : progress.phase === "finalizing"
+              ? "正在写入 PDF，马上完成"
+              : "PDF 页面已拼接完成";
+        updateExportProgress("pdf", progress.phase, progress.current, progress.total, message);
+      });
       const defaultName = completed.length === 1
         ? `${completed[0].name.replace(/\.[^.]+$/, "")}-translated.pdf`
         : "hanami-translated.pdf";
       if (isNative()) {
+        updateExportProgress("pdf", "writing", completed.length, completed.length, "正在保存 PDF 文件");
         const path = await chooseOutputPdf(defaultName);
-        if (!path) return;
+        if (!path) {
+          cancelExport();
+          return;
+        }
         await writeOutput(path, pdfBytesToDataUrl(output));
       } else {
+        updateExportProgress("pdf", "writing", completed.length, completed.length, "正在触发 PDF 下载");
         downloadPdf(output, defaultName);
       }
+      completeExport("pdf", completed.length, `PDF 导出完成，共 ${completed.length} 页`);
       showNotice(`已按页面顺序导出 ${completed.length} 页 PDF`, "success");
     } catch (error) {
+      cancelExport();
       showNotice(String(error), "error");
     }
   };
@@ -362,6 +432,7 @@ export default function App() {
           subtitle={subtitle}
           processing={processing}
           stopping={stopping}
+          exporting={Boolean(exportProgress)}
           canExport={completedCount > 0}
           onProcess={() => void processAllPages()}
           onStop={() => void stopProcessing()}
@@ -369,6 +440,7 @@ export default function App() {
           onExportPdf={() => void exportPdfResults()}
           onSettings={() => setSettingsOpen(true)}
         />
+        {exportProgress && <ExportProgressBar progress={exportProgress} />}
         <div className="work-area">
           <CanvasWorkbench page={selectedPage} selectedRegionId={selectedRegionId} drawingKind={drawingKind} onSelectRegion={setSelectedRegionId} onDrawingKindChange={setDrawingKind} onAddRegion={addRegion} onUpdateRegion={updateRegion} />
           <Inspector page={selectedPage} settings={settings} selectedRegionId={selectedRegionId} onSettingsChange={(patch) => setSettings((current) => ({ ...current, ...patch }))} onSelectRegion={setSelectedRegionId} onDeleteRegion={deleteRegion} onDrawRegion={setDrawingKind} onRetryPage={() => void processSelectedPage()} />
@@ -379,6 +451,42 @@ export default function App() {
       <SettingsModal open={settingsOpen} settings={settings} onClose={() => setSettingsOpen(false)} onSettingsChange={(patch) => setSettings((current) => ({ ...current, ...patch }))} onNotice={showNotice} />
     </div>
   );
+}
+
+function ExportProgressBar({ progress }: { progress: ExportProgress }) {
+  const percent = exportProgressPercent(progress);
+  const label = progress.kind === "pdf" ? "PDF 导出" : "PNG 导出";
+  const indeterminate = progress.phase === "finalizing";
+  return (
+    <div className="export-progress" role="status" aria-live="polite">
+      <div className="export-progress-heading">
+        <span><strong>{label}</strong><span className="export-progress-message">{progress.message}</span></span>
+        <span className="export-progress-percent">{percent}%</span>
+      </div>
+      <div
+        className={`export-progress-track ${indeterminate ? "indeterminate" : ""}`}
+        role="progressbar"
+        aria-label={`${label}进度`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-valuetext={progress.message}
+      >
+        <div className="export-progress-value" style={{ width: `${percent}%` }} />
+      </div>
+      <span className="export-progress-detail">
+        {progress.phase === "finalizing" ? "正在整理 PDF 页面与文件结构，请稍候" : `${Math.min(progress.current, progress.total)} / ${progress.total} 页`}
+      </span>
+    </div>
+  );
+}
+
+function exportProgressPercent(progress: ExportProgress): number {
+  if (progress.phase === "completed") return 100;
+  if (progress.phase === "preparing") return 3;
+  if (progress.phase === "rendering") return Math.min(88, Math.round((progress.current / Math.max(progress.total, 1)) * 88));
+  if (progress.phase === "finalizing") return 93;
+  return 98;
 }
 
 function browserDemoAsset(): SourceAsset {

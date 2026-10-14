@@ -6,6 +6,7 @@ interface TopToolbarProps {
   subtitle: string;
   processing: boolean;
   stopping: boolean;
+  exporting: boolean;
   canExport: boolean;
   onProcess: () => void;
   onStop: () => void;
@@ -14,7 +15,7 @@ interface TopToolbarProps {
   onSettings: () => void;
 }
 
-export function TopToolbar({ title, subtitle, processing, stopping, canExport, onProcess, onStop, onExportPng, onExportPdf, onSettings }: TopToolbarProps) {
+export function TopToolbar({ title, subtitle, processing, stopping, exporting, canExport, onProcess, onStop, onExportPng, onExportPdf, onSettings }: TopToolbarProps) {
   const [exportOpen, setExportOpen] = useState(false);
   const exportMenu = useRef<HTMLDivElement>(null);
 
@@ -54,11 +55,12 @@ export function TopToolbar({ title, subtitle, processing, stopping, canExport, o
             className="secondary-command"
             onClick={() => setExportOpen((open) => !open)}
             type="button"
-            disabled={!canExport}
+            disabled={!canExport || exporting}
+            aria-busy={exporting}
             aria-haspopup="menu"
             aria-expanded={exportOpen}
           >
-            <Download size={17} />导出<ChevronDown size={14} />
+            <Download size={17} />{exporting ? "导出中" : "导出"}<ChevronDown size={14} />
           </button>
           {exportOpen && (
             <div className="export-popover" role="menu" aria-label="导出格式">

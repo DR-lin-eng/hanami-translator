@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { ProcessPageRequest, ProcessPageResult, SourceAsset } from "../types";
+import type { AppSettings, ProcessPageRequest, ProcessPageResult, SourceAsset } from "../types";
 
 declare global {
   interface Window {
@@ -75,8 +75,8 @@ export const deleteApiKey = () => invoke<void>("delete_api_key");
 
 export const apiKeyConfigured = () => invoke<boolean>("api_key_configured");
 
-export const testApiConnection = (apiBase: string, imageModel: string) =>
-  invoke<void>("test_api_connection", { settings: { apiBase, imageModel } });
+export const testApiConnection = (settings: Pick<AppSettings, "apiBase" | "apiMode" | "responsesModel" | "imageModel">) =>
+  invoke<void>("test_api_connection", { settings });
 
 export const writeOutput = (path: string, dataUrl: string) =>
   invoke<void>("write_output", { path, dataUrl });

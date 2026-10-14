@@ -59,7 +59,7 @@ export function Inspector({ page, settings, selectedRegionId, onSettingsChange, 
         />
 
         <div className="setting-row">
-          <span><strong>并发页数</strong><small>同时调用 Images API</small></span>
+          <span><strong>并发页数</strong><small>同时调用 {settings.apiMode === "responses" ? "Responses" : "Images"} API</small></span>
           <div className="stepper">
             <button type="button" onClick={() => onSettingsChange({ concurrency: Math.max(1, settings.concurrency - 1) })} aria-label="减少并发"><Minus size={14} /></button>
             <output>{settings.concurrency}</output>

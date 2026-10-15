@@ -1,6 +1,6 @@
 [package]
 name = "hanami-translator"
-version = "0.2.0"
+version = "0.2.1"
 description = "Privacy-first manga translation and typesetting desktop application"
 authors = ["DR-lin-eng"]
 edition = "2021"

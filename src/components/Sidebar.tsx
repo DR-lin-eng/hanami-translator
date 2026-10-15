@@ -16,10 +16,10 @@ export function Sidebar({ pages, selectedId, onSelect, onImages, onFolder, onPdf
   return (
     <aside className="sidebar" aria-label="项目页面">
       <div className="brand" data-tauri-drag-region>
-        <div className="brand-mark" aria-hidden="true">文</div>
-        <div>
-          <strong>花见翻译</strong>
-          <span>{pages.length ? `${completeCount}/${pages.length} 已完成` : "新项目"}</span>
+        <div className="brand-mark" aria-hidden="true" data-tauri-drag-region>文</div>
+        <div data-tauri-drag-region>
+          <strong data-tauri-drag-region>花见翻译</strong>
+          <span data-tauri-drag-region>{pages.length ? `${completeCount}/${pages.length} 已完成` : "新项目"}</span>
         </div>
       </div>
 

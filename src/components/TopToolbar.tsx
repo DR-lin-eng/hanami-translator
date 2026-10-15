@@ -43,8 +43,8 @@ export function TopToolbar({ title, subtitle, processing, stopping, exporting, c
   return (
     <header className="top-toolbar" data-tauri-drag-region>
       <div className="document-title" data-tauri-drag-region>
-        <strong>{title}</strong>
-        <span>{subtitle}</span>
+        <strong data-tauri-drag-region>{title}</strong>
+        <span data-tauri-drag-region>{subtitle}</span>
       </div>
       <div className="toolbar-actions">
         <button className="icon-button" onClick={onSettings} type="button" aria-label="API 与模型设置" title="API 与模型设置">

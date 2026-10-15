@@ -28,6 +28,8 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 
 body { background: var(--surface-secondary); color: var(--label); }
 
+[data-tauri-drag-region] { user-select: none; -webkit-user-select: none; }
+
 button, input, select, textarea { font: inherit; letter-spacing: 0; }
 button { color: inherit; }
 
